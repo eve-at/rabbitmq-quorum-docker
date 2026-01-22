@@ -1,0 +1,24 @@
+# Logs
+logs/*
+!logs/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PHP
+vendor/
+composer.lock
+
+# Docker
+.docker/
+
+# Environment
+.env
+.env.local

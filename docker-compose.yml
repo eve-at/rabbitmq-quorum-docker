@@ -1,0 +1,123 @@
+services:
+  rabbitmq1:
+    image: rabbitmq:3.12-management
+    hostname: rabbitmq1
+    container_name: quorum-rabbitmq1
+    environment:
+      RABBITMQ_ERLANG_COOKIE: 'secret_cookie_for_cluster'
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - rabbitmq_network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  rabbitmq2:
+    image: rabbitmq:3.12-management
+    hostname: rabbitmq2
+    container_name: quorum-rabbitmq2
+    environment:
+      RABBITMQ_ERLANG_COOKIE: 'secret_cookie_for_cluster'
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    networks:
+      - rabbitmq_network
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  rabbitmq3:
+    image: rabbitmq:3.12-management
+    hostname: rabbitmq3
+    container_name: quorum-rabbitmq3
+    environment:
+      RABBITMQ_ERLANG_COOKIE: 'secret_cookie_for_cluster'
+    ports:
+      - "5674:5672"
+      - "15674:15672"
+    networks:
+      - rabbitmq_network
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  rabbitmq-cluster-setup:
+    image: rabbitmq:3.12-management
+    container_name: quorum-rabbitmq-cluster-setup
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      rabbitmq2:
+        condition: service_healthy
+      rabbitmq3:
+        condition: service_healthy
+    environment:
+      RABBITMQ_ERLANG_COOKIE: 'secret_cookie_for_cluster'
+    networks:
+      - rabbitmq_network
+    command: >
+      bash -c "
+        sleep 5 &&
+        rabbitmqctl -n rabbit@rabbitmq2 stop_app &&
+        rabbitmqctl -n rabbit@rabbitmq2 reset &&
+        rabbitmqctl -n rabbit@rabbitmq2 join_cluster rabbit@rabbitmq1 &&
+        rabbitmqctl -n rabbit@rabbitmq2 start_app &&
+        rabbitmqctl -n rabbit@rabbitmq3 stop_app &&
+        rabbitmqctl -n rabbit@rabbitmq3 reset &&
+        rabbitmqctl -n rabbit@rabbitmq3 join_cluster rabbit@rabbitmq1 &&
+        rabbitmqctl -n rabbit@rabbitmq3 start_app &&
+        sleep 5 &&
+        rabbitmqctl -n rabbit@rabbitmq1 set_policy quorum-policy '.*' '{\"ha-mode\":\"all\"}' --apply-to queues &&
+        echo 'Cluster setup completed successfully'
+      "
+
+  producer:
+    build: ./producer
+    container_name: quorum-producer
+    depends_on:
+      rabbitmq-cluster-setup:
+        condition: service_completed_successfully
+    networks:
+      - rabbitmq_network
+    environment:
+      RABBITMQ_HOSTS: rabbitmq1:5672,rabbitmq2:5672,rabbitmq3:5672
+      RABBITMQ_USER: admin
+      RABBITMQ_PASS: admin
+    restart: unless-stopped
+
+  consumer:
+    build: ./consumer
+    container_name: quorum-consumer
+    depends_on:
+      rabbitmq-cluster-setup:
+        condition: service_completed_successfully
+    networks:
+      - rabbitmq_network
+    environment:
+      RABBITMQ_HOSTS: rabbitmq1:5672,rabbitmq2:5672,rabbitmq3:5672
+      RABBITMQ_USER: admin
+      RABBITMQ_PASS: admin
+    volumes:
+      - ./logs:/var/log/consumer
+    restart: unless-stopped
+
+networks:
+  rabbitmq_network:
+    driver: bridge
